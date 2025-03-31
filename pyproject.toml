@@ -102,8 +102,6 @@ gemini = ["google-genai", "google-api-core", "torch"]
 
 litellm = ["litellm", "torch", "transformers"]
 
-ollama = [ollama]
-
 mongo = ["pymongo"]
 
 
