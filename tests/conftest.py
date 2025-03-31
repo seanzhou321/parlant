@@ -74,8 +74,11 @@ from parlant.core.engines.alpha.engine import AlphaEngine
 from parlant.core.glossary import GlossaryStore, GlossaryVectorStore
 from parlant.core.engines.alpha.guideline_matcher import (
     GuidelineMatcher,
-    GuidelineMatchingShot,
-    GuidelineMatchesSchema,
+    GenericGuidelineMatchingShot,
+    GenericGuidelineMatchesSchema,
+    GenericGuidelineMatching,
+    DefaultGuidelineMatchingStrategyResolver,
+    GuidelineMatchingStrategyResolver,
 )
 from parlant.core.engines.alpha.message_generator import (
     MessageGenerator,
@@ -272,7 +275,7 @@ async def container(
         container[EntityQueries] = Singleton(EntityQueries)
         container[EntityCommands] = Singleton(EntityCommands)
         for generation_schema in (
-            GuidelineMatchesSchema,
+            GenericGuidelineMatchesSchema,
             MessageSchema,
             UtteranceSelectionSchema,
             UtteranceCompositionSchema,
@@ -288,7 +291,7 @@ async def container(
                 generation_schema,
             )
 
-        container[ShotCollection[GuidelineMatchingShot]] = guideline_matcher.shot_collection
+        container[ShotCollection[GenericGuidelineMatchingShot]] = guideline_matcher.shot_collection
         container[ShotCollection[ToolCallerInferenceShot]] = tool_caller.shot_collection
         container[ShotCollection[MessageGeneratorShot]] = message_generator.shot_collection
 
@@ -301,7 +304,13 @@ async def container(
                 name="local", kind="local", url=""
             ),
         )
-
+        container[DefaultGuidelineMatchingStrategyResolver] = Singleton(
+            DefaultGuidelineMatchingStrategyResolver
+        )
+        container[GuidelineMatchingStrategyResolver] = lambda container: container[
+            DefaultGuidelineMatchingStrategyResolver
+        ]
+        container[GenericGuidelineMatching] = Singleton(GenericGuidelineMatching)
         container[GuidelineMatcher] = Singleton(GuidelineMatcher)
         container[UtteranceSelector] = Singleton(UtteranceSelector)
         container[UtteranceFieldExtractor] = Singleton(UtteranceFieldExtractor)
@@ -342,12 +351,12 @@ class NoCachedGenerations:
 @fixture
 def no_cache(container: Container) -> None:
     if isinstance(
-        container[SchematicGenerator[GuidelineMatchesSchema]],
+        container[SchematicGenerator[GenericGuidelineMatchesSchema]],
         CachedSchematicGenerator,
     ):
         cast(
-            CachedSchematicGenerator[GuidelineMatchesSchema],
-            container[SchematicGenerator[GuidelineMatchesSchema]],
+            CachedSchematicGenerator[GenericGuidelineMatchesSchema],
+            container[SchematicGenerator[GenericGuidelineMatchesSchema]],
         ).use_cache = False
 
     if isinstance(

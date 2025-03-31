@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain
 from typing import Sequence, cast
+from typing_extensions import override
 
 from lagom import Container
 from more_itertools import unique
@@ -34,13 +35,21 @@ from parlant.core.emissions import EmittedEvent
 from parlant.core.glossary import Term
 from parlant.core.nlp.generation import SchematicGenerator
 from parlant.core.engines.alpha.guideline_matcher import (
+    DefaultGuidelineMatchingStrategyResolver,
     GuidelineMatcher,
-    GuidelineMatchesSchema,
+    GenericGuidelineMatchesSchema,
+    GuidelineMatchingBatch,
+    GuidelineMatchingBatchResult,
+    GuidelineMatchingStrategy,
+    GuidelineMatchingContext,
+    GuidelineMatchingStrategyResolver,
 )
 from parlant.core.engines.alpha.guideline_match import (
     GuidelineMatch,
+    PreviouslyAppliedType,
 )
 from parlant.core.guidelines import Guideline, GuidelineContent, GuidelineId
+from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo
 from parlant.core.sessions import EventSource
 from parlant.core.loggers import Logger
 from parlant.core.glossary import TermId
@@ -197,7 +206,7 @@ class ContextOfTest:
     container: Container
     sync_await: SyncAwaiter
     guidelines: list[Guideline]
-    schematic_generator: SchematicGenerator[GuidelineMatchesSchema]
+    schematic_generator: SchematicGenerator[GenericGuidelineMatchesSchema]
     logger: Logger
 
 
@@ -211,7 +220,7 @@ def context(
         sync_await,
         guidelines=list(),
         logger=container[Logger],
-        schematic_generator=container[SchematicGenerator[GuidelineMatchesSchema]],
+        schematic_generator=container[SchematicGenerator[GenericGuidelineMatchesSchema]],
     )
 
 
@@ -224,11 +233,6 @@ def match_guidelines(
     terms: Sequence[Term] = [],
     staged_events: Sequence[EmittedEvent] = [],
 ) -> Sequence[GuidelineMatch]:
-    guideline_matcher = GuidelineMatcher(
-        context.logger,
-        context.schematic_generator,
-    )
-
     interaction_history = [
         create_event_message(
             offset=i,
@@ -239,14 +243,14 @@ def match_guidelines(
     ]
 
     guideline_matching_result = context.sync_await(
-        guideline_matcher.match_guidelines(
+        context.container[GuidelineMatcher].match_guidelines(
             agent=agent,
             customer=customer,
-            guidelines=context.guidelines,
             context_variables=context_variables,
             interaction_history=interaction_history,
             terms=terms,
             staged_events=staged_events,
+            guidelines=context.guidelines,
         )
     )
 
@@ -370,7 +374,7 @@ def test_that_relevant_guidelines_are_matched_parametrized_2(
         (
             "ai_agent",
             "How about our guided meditation session every Tuesday evening at 20:00? "
-            "It’s very calming and might be just what you need right now.",
+            "It's very calming and might be just what you need right now.",
         ),
         ("customer", "Alright, please book me into that. Thank you for understanding."),
         (
@@ -545,12 +549,12 @@ def test_that_guidelines_are_matched_based_on_glossary(
         ),
     ]
     conversation_context: list[tuple[str, str]] = [
-        ("customer", "Hi, I’m looking for a hiking route through a forest. Can you help me?"),
+        ("customer", "Hi, I'm looking for a hiking route through a forest. Can you help me?"),
         (
             "ai_agent",
             "Of course! I can help you find a trail. Are you looking for an easy, moderate, or challenging hike?",
         ),
-        ("customer", "I’d prefer something moderate, not too easy but also not too tough."),
+        ("customer", "I'd prefer something moderate, not too easy but also not too tough."),
         (
             "ai_agent",
             "Great choice! We have a few moderate trails in the Redwood Forest and the Pinewood Trail. Would you like details on these?",
@@ -948,3 +952,144 @@ def test_that_guideline_with_multiple_actions_is_partially_fulfilled_when_a_few_
         conversation_guideline_names,
         [],
     )
+
+
+class ActivateEveryGuidelineBatch(GuidelineMatchingBatch):
+    def __init__(self, guidelines: Sequence[Guideline]):
+        self.guidelines = guidelines
+
+    @override
+    async def process(self) -> GuidelineMatchingBatchResult:
+        return GuidelineMatchingBatchResult(
+            matches=[
+                GuidelineMatch(
+                    guideline=g,
+                    score=10,
+                    rationale="",
+                    guideline_previously_applied=PreviouslyAppliedType.NO,
+                    guideline_is_continuous=False,
+                    should_reapply=False,
+                )
+                for g in self.guidelines
+            ],
+            generation_info=GenerationInfo(
+                schema_name="",
+                model="",
+                duration=0.0,
+                usage=UsageInfo(
+                    input_tokens=0,
+                    output_tokens=0,
+                    extra={},
+                ),
+            ),
+        )
+
+
+def test_that_guideline_matching_strategies_can_be_overridden(
+    context: ContextOfTest,
+    agent: Agent,
+    customer: Customer,
+) -> None:
+    class SkipAllGuidelineBatch(GuidelineMatchingBatch):
+        def __init__(self, guidelines: Sequence[Guideline]):
+            self.guidelines = guidelines
+
+        @override
+        async def process(self) -> GuidelineMatchingBatchResult:
+            return GuidelineMatchingBatchResult(
+                matches=[],
+                generation_info=GenerationInfo(
+                    schema_name="",
+                    model="",
+                    duration=0.0,
+                    usage=UsageInfo(
+                        input_tokens=0,
+                        output_tokens=0,
+                        extra={},
+                    ),
+                ),
+            )
+
+    class LongConditionStrategy(GuidelineMatchingStrategy):
+        @override
+        async def create_batches(
+            self,
+            guidelines: Sequence[Guideline],
+            context: GuidelineMatchingContext,
+        ) -> Sequence[GuidelineMatchingBatch]:
+            return [
+                ActivateEveryGuidelineBatch(guidelines=guidelines),
+            ]
+
+    class ShortConditionStrategy(GuidelineMatchingStrategy):
+        @override
+        async def create_batches(
+            self,
+            guidelines: Sequence[Guideline],
+            context: GuidelineMatchingContext,
+        ) -> Sequence[GuidelineMatchingBatch]:
+            return [SkipAllGuidelineBatch(guidelines=guidelines)]
+
+    class LenGuidelineMatchingStrategyResolver(GuidelineMatchingStrategyResolver):
+        @override
+        async def resolve(self, guideline: Guideline) -> GuidelineMatchingStrategy:
+            return (
+                LongConditionStrategy()
+                if len(guideline.content.condition.split()) >= 4
+                else ShortConditionStrategy()
+            )
+
+    context.container[GuidelineMatcher].strategy_resolver = LenGuidelineMatchingStrategyResolver()
+
+    guidelines = [
+        create_guideline(context, "a customer asks for a drink", "check stock"),
+        create_guideline(context, "ask for drink", "check stock"),
+        create_guideline(context, "customer needs help", "assist customer"),
+        create_guideline(context, "help", "assist customer"),
+    ]
+
+    guideline_matches = match_guidelines(context, agent, customer, [])
+
+    long_condition_guidelines = [g for g in guidelines if len(g.content.condition.split()) >= 4]
+    short_condition_guidelines = [g for g in guidelines if len(g.content.condition.split()) < 4]
+
+    assert all(
+        g in [match.guideline for match in guideline_matches] for g in long_condition_guidelines
+    )
+
+    assert all(
+        g not in [match.guideline for match in guideline_matches]
+        for g in short_condition_guidelines
+    )
+
+
+def test_that_strategy_for_specific_guideline_can_be_overridden_in_default_strategy_resolver(
+    context: ContextOfTest,
+    agent: Agent,
+    customer: Customer,
+) -> None:
+    class CustomGuidelineMatchingStrategy(GuidelineMatchingStrategy):
+        @override
+        async def create_batches(
+            self,
+            guidelines: Sequence[Guideline],
+            context: GuidelineMatchingContext,
+        ) -> Sequence[GuidelineMatchingBatch]:
+            return [ActivateEveryGuidelineBatch(guidelines=guidelines)]
+
+    guideline = create_guideline(context, "a customer asks for a drink", "check stock")
+
+    context.container[DefaultGuidelineMatchingStrategyResolver].guideline_overrides[
+        guideline.id
+    ] = CustomGuidelineMatchingStrategy()
+
+    create_guideline(context, "ask for drink", "check stock")
+    create_guideline(context, "customer needs help", "assist customer")
+
+    conversation_context: list[tuple[str, str]] = [
+        ("customer", "I want help with my order"),
+    ]
+
+    guideline_matches = match_guidelines(context, agent, customer, conversation_context)
+
+    assert guideline.id in [match.guideline.id for match in guideline_matches]

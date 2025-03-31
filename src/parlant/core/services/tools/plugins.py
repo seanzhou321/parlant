@@ -120,6 +120,7 @@ class _ToolDecoratorParams(TypedDict, total=False):
     id: str
     name: str
     consequential: bool
+    metadata: Mapping[str, JSONSerializable]
 
 
 _ToolParameterType = Union[str, int, float, bool, list[Any], None]
@@ -268,6 +269,7 @@ async def _recompute_and_marshal_tool(tool: Tool, plugin_data: Mapping[str, Any]
         name=tool.name,
         creation_utc=datetime.now(timezone.utc),
         description=tool.description,
+        metadata=tool.metadata,
         parameters=new_parameters,
         required=tool.required,
         consequential=tool.consequential,
@@ -381,11 +383,12 @@ def _tool_decorator_impl(
         entry = ToolEntry(
             tool=Tool(
                 creation_utc=datetime.now(timezone.utc),
-                name=kwargs.get("name") or func.__name__,
+                name=kwargs.get("name", func.__name__),
                 description=func.__doc__ or "",
+                metadata=kwargs.get("metadata", {}),
                 parameters=_describe_parameters(func),
                 required=_find_required_params(func),
-                consequential=kwargs.get("consequential") or False,
+                consequential=kwargs.get("consequential", False),
             ),
             function=func,
         )
@@ -710,6 +713,7 @@ class PluginClient(ToolService):
                 name=t["name"],
                 creation_utc=dateutil.parser.parse(t["creation_utc"]),
                 description=t["description"],
+                metadata=t["metadata"],
                 parameters=self._translate_parameters(t["parameters"]),
                 required=t["required"],
                 consequential=t["consequential"],
@@ -732,6 +736,7 @@ class PluginClient(ToolService):
             name=t["name"],
             creation_utc=dateutil.parser.parse(t["creation_utc"]),
             description=t["description"],
+            metadata=t["metadata"],
             parameters=self._translate_parameters(t["parameters"]),
             required=t["required"],
             consequential=t["consequential"],

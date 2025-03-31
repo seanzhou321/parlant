@@ -150,6 +150,7 @@ class OpenAPIClient(ToolService):
                     name=operation.operation_id,
                     creation_utc=datetime.now(timezone.utc),
                     description=operation.description or "",
+                    metadata={},
                     parameters={
                         name: (value, ToolParameterOptions())
                         for name, value in {

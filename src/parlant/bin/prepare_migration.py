@@ -369,6 +369,18 @@ async def migrate_agents_0_1_0_to_0_2_0() -> None:
 
     await migrate_glossary_with_metadata()
 
+    agent_collection = await agents_db.get_or_create_collection(
+        "agents",
+        BaseDocument,
+        identity_loader,
+    )
+
+    for doc in await agent_collection.find(filters={}):
+        await agent_collection.update_one(
+            filters={"id": {"$eq": ObjectId(doc["id"])}},
+            params={"version": Version.String("0.2.0")},
+        )
+
     await upgrade_document_database_metadata(agents_db, Version.String("0.2.0"))
 
 

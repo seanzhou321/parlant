@@ -94,9 +94,12 @@ from parlant.core.guideline_tool_associations import (
 )
 from parlant.core.engines.alpha.tool_caller import ToolCallInferenceSchema, ToolCallerInferenceShot
 from parlant.core.engines.alpha.guideline_matcher import (
+    GenericGuidelineMatching,
     GuidelineMatcher,
-    GuidelineMatchingShot,
-    GuidelineMatchesSchema,
+    GenericGuidelineMatchingShot,
+    GenericGuidelineMatchesSchema,
+    DefaultGuidelineMatchingStrategyResolver,
+    GuidelineMatchingStrategyResolver,
 )
 from parlant.core.engines.alpha.message_generator import (
     MessageGenerator,
@@ -281,14 +284,13 @@ async def setup_container() -> AsyncIterator[Container]:
     c[WebSocketLogger] = web_socket_logger
     c[Logger] = CompositeLogger([LOGGER, web_socket_logger])
 
-    c[ShotCollection[GuidelineMatchingShot]] = guideline_matcher.shot_collection
+    c[ShotCollection[GenericGuidelineMatchingShot]] = guideline_matcher.shot_collection
     c[ShotCollection[ToolCallerInferenceShot]] = tool_caller.shot_collection
     c[ShotCollection[MessageGeneratorShot]] = message_generator.shot_collection
 
     c[EngineHooks] = EngineHooks()
     c[EventEmitterFactory] = Singleton(EventPublisherFactory)
 
-    c[GuidelineMatcher] = Singleton(GuidelineMatcher)
     c[ToolEventGenerator] = Singleton(ToolEventGenerator)
     c[UtteranceFieldExtractor] = Singleton(UtteranceFieldExtractor)
     c[UtteranceSelector] = Singleton(UtteranceSelector)
@@ -438,9 +440,9 @@ async def initialize_container(
         die("Please re-run with `--migrate` to migrate your data to the new version.")
         sys.exit(1)
 
-    c[SchematicGenerator[GuidelineMatchesSchema]] = await nlp_service.get_schematic_generator(
-        GuidelineMatchesSchema
-    )
+    c[
+        SchematicGenerator[GenericGuidelineMatchesSchema]
+    ] = await nlp_service.get_schematic_generator(GenericGuidelineMatchesSchema)
     c[SchematicGenerator[MessageSchema]] = await nlp_service.get_schematic_generator(MessageSchema)
     c[SchematicGenerator[UtteranceSelectionSchema]] = await nlp_service.get_schematic_generator(
         UtteranceSelectionSchema
@@ -463,6 +465,16 @@ async def initialize_container(
     c[
         SchematicGenerator[GuidelineConnectionPropositionsSchema]
     ] = await nlp_service.get_schematic_generator(GuidelineConnectionPropositionsSchema)
+
+    c[GenericGuidelineMatching] = Singleton(GenericGuidelineMatching)
+
+    c[DefaultGuidelineMatchingStrategyResolver] = Singleton(
+        DefaultGuidelineMatchingStrategyResolver
+    )
+    c[GuidelineMatchingStrategyResolver] = lambda container: container[
+        DefaultGuidelineMatchingStrategyResolver
+    ]
+    c[GuidelineMatcher] = Singleton(GuidelineMatcher)
 
 
 async def recover_server_tasks(

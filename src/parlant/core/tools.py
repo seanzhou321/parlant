@@ -156,6 +156,7 @@ class Tool:
     name: str
     creation_utc: datetime
     description: str
+    metadata: Mapping[str, Any]
     parameters: dict[str, tuple[ToolParameterDescriptor, ToolParameterOptions]]
     required: list[str]
     consequential: bool
@@ -250,6 +251,7 @@ class LocalToolService(ToolService):
             creation_utc=local_tool.creation_utc,
             name=local_tool.name,
             description=local_tool.description,
+            metadata={},
             parameters={
                 name: (descriptor, ToolParameterOptions())
                 for name, descriptor in local_tool.parameters.items()

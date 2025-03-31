@@ -141,7 +141,7 @@ async def test_that_a_plugin_with_one_configured_tool_returns_that_tool(
 
 
 async def test_that_a_plugin_reads_a_tool(container: Container) -> None:
-    @tool
+    @tool(metadata={"test-metadata": {"one": 1}})
     def my_tool(context: ToolContext, arg_1: int, arg_2: Optional[int]) -> ToolResult:
         """My tool's description"""
         return ToolResult(arg_1 * (arg_2 or 0))
@@ -151,6 +151,7 @@ async def test_that_a_plugin_reads_a_tool(container: Container) -> None:
             returned_tool = await client.read_tool(my_tool.tool.name)
             assert my_tool.tool.name == returned_tool.name
             assert my_tool.tool.description == returned_tool.description
+            assert my_tool.tool.metadata == returned_tool.metadata
             assert my_tool.tool.required == returned_tool.required
 
             for param_name, (param_descriptor, param_options) in my_tool.tool.parameters.items():

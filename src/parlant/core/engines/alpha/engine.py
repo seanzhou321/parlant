@@ -60,6 +60,7 @@ from parlant.core.engines.alpha.guideline_match import (
 from parlant.core.engines.alpha.tool_event_generator import (
     ToolEventGenerationResult,
     ToolEventGenerator,
+    ToolPreexecutionState,
 )
 from parlant.core.engines.alpha.utils import context_variables_to_json
 from parlant.core.engines.types import Context, Engine, UtteranceReason, UtteranceRequest
@@ -340,6 +341,10 @@ class AlphaEngine(Engine):
         context.state.glossary_terms.update(await self._load_glossary_terms(context))
 
     async def _run_preparation_iteration(self, context: LoadedContext) -> PreparationIteration:
+        # For optimization concerns, it's useful to capture the exact state
+        # we were in before matching guidelines.
+        tool_preexecution_state = await self._capture_tool_preexecution_state(context)
+
         # Match relevant guidelines, retrieving them in a
         # structured format such that we can distinguish
         # between ordinary and tool-enabled ones.
@@ -347,7 +352,7 @@ class AlphaEngine(Engine):
             guideline_matching_result,
             context.state.ordinary_guideline_matches,
             context.state.tool_enabled_guideline_matches,
-        ) = await self._load_matched_guidelines(context, context.state)
+        ) = await self._load_matched_guidelines(context)
 
         # Matched guidelines may use glossasry terms, so we need to ground our
         # response by reevaluating the relevant terms given these new guidelines.
@@ -355,14 +360,18 @@ class AlphaEngine(Engine):
 
         # Infer any needed tool calls and execute them,
         # adding the resulting tool events to the session.
-        (
-            tool_event_generation_result,
-            new_tool_events,
-            tool_insights,
-        ) = await self._call_tools(context, context.state)
+        if tool_calling_result := await self._call_tools(context, tool_preexecution_state):
+            (
+                tool_event_generation_result,
+                new_tool_events,
+                tool_insights,
+            ) = tool_calling_result
 
-        context.state.tool_events += new_tool_events
-        context.state.tool_insights = tool_insights
+            context.state.tool_events += new_tool_events
+            context.state.tool_insights = tool_insights
+        else:
+            tool_event_generation_result = None
+            new_tool_events = []
 
         # Tool calls may have returned with data that uses glossary terms,
         # so we need to ground our response again by reevaluating terms.
@@ -589,10 +598,25 @@ class AlphaEngine(Engine):
 
         return result
 
+    async def _capture_tool_preexecution_state(
+        self, context: LoadedContext
+    ) -> ToolPreexecutionState:
+        return await self._tool_event_generator.create_preexecution_state(
+            context.event_emitter,
+            context.session.id,
+            context.agent,
+            context.customer,
+            context.state.context_variables,
+            context.interaction.history,
+            list(context.state.glossary_terms),
+            context.state.ordinary_guideline_matches,
+            context.state.tool_enabled_guideline_matches,
+            context.state.tool_events,
+        )
+
     async def _load_matched_guidelines(
         self,
         context: LoadedContext,
-        state: ResponseState,
     ) -> tuple[
         GuidelineMatchingResult,
         list[GuidelineMatch],
@@ -611,11 +635,11 @@ class AlphaEngine(Engine):
         matching_result = await self._guideline_matcher.match_guidelines(
             agent=context.agent,
             customer=context.customer,
-            guidelines=all_stored_guidelines,
-            context_variables=state.context_variables,
+            context_variables=context.state.context_variables,
             interaction_history=context.interaction.history,
-            terms=list(state.glossary_terms),
-            staged_events=state.tool_events,
+            terms=list(context.state.glossary_terms),
+            staged_events=context.state.tool_events,
+            guidelines=all_stored_guidelines,
         )
 
         # Step 3: Load connected guidelines that may not have
@@ -779,19 +803,35 @@ class AlphaEngine(Engine):
         return []
 
     async def _call_tools(
-        self, context: LoadedContext, state: ResponseState
-    ) -> tuple[ToolEventGenerationResult, list[EmittedEvent], ToolInsights]:
+        self,
+        context: LoadedContext,
+        preexecution_state: ToolPreexecutionState,
+    ) -> tuple[ToolEventGenerationResult, list[EmittedEvent], ToolInsights] | None:
+        preexecution_guidelines = set(
+            match.guideline
+            for match in [
+                *preexecution_state.ordinary_guideline_matches,
+                *preexecution_state.tool_enabled_guideline_matches,
+            ]
+        )
+
+        if not preexecution_guidelines.symmetric_difference(context.state.guidelines):
+            # The only case where we need to run tools is if a new reason to run a tool
+            # has been detected. If guidelines haven't changed, there's no new reason.
+            return None
+
         result = await self._tool_event_generator.generate_events(
+            preexecution_state,
             event_emitter=context.event_emitter,
             session_id=context.session.id,
             agent=context.agent,
             customer=context.customer,
-            context_variables=state.context_variables,
+            context_variables=context.state.context_variables,
             interaction_history=context.interaction.history,
-            terms=list(state.glossary_terms),
-            ordinary_guideline_matches=state.ordinary_guideline_matches,
-            tool_enabled_guideline_matches=state.tool_enabled_guideline_matches,
-            staged_events=state.tool_events,
+            terms=list(context.state.glossary_terms),
+            ordinary_guideline_matches=context.state.ordinary_guideline_matches,
+            tool_enabled_guideline_matches=context.state.tool_enabled_guideline_matches,
+            staged_events=context.state.tool_events,
         )
 
         tool_events = [e for e in result.events if e] if result else []

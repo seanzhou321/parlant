@@ -40,6 +40,20 @@ class ToolEventGenerationResult:
     insights: ToolInsights
 
 
+@dataclass(frozen=True)
+class ToolPreexecutionState:
+    event_emitter: EventEmitter
+    session_id: SessionId
+    agent: Agent
+    customer: Customer
+    context_variables: Sequence[tuple[ContextVariable, ContextVariableValue]]
+    interaction_history: Sequence[Event]
+    terms: Sequence[Term]
+    ordinary_guideline_matches: Sequence[GuidelineMatch]
+    tool_enabled_guideline_matches: Mapping[GuidelineMatch, Sequence[ToolId]]
+    staged_events: Sequence[EmittedEvent]
+
+
 class ToolEventGenerator:
     def __init__(
         self,
@@ -54,7 +68,7 @@ class ToolEventGenerator:
 
         self.tool_caller = ToolCaller(logger, service_registry, schematic_generator)
 
-    async def generate_events(
+    async def create_preexecution_state(
         self,
         event_emitter: EventEmitter,
         session_id: SessionId,
@@ -66,7 +80,36 @@ class ToolEventGenerator:
         ordinary_guideline_matches: Sequence[GuidelineMatch],
         tool_enabled_guideline_matches: Mapping[GuidelineMatch, Sequence[ToolId]],
         staged_events: Sequence[EmittedEvent],
+    ) -> ToolPreexecutionState:
+        return ToolPreexecutionState(
+            event_emitter,
+            session_id,
+            agent,
+            customer,
+            context_variables,
+            interaction_history,
+            terms,
+            ordinary_guideline_matches,
+            tool_enabled_guideline_matches,
+            staged_events,
+        )
+
+    async def generate_events(
+        self,
+        preexecution_state: ToolPreexecutionState,
+        event_emitter: EventEmitter,
+        session_id: SessionId,
+        agent: Agent,
+        customer: Customer,
+        context_variables: Sequence[tuple[ContextVariable, ContextVariableValue]],
+        interaction_history: Sequence[Event],
+        terms: Sequence[Term],
+        ordinary_guideline_matches: Sequence[GuidelineMatch],
+        tool_enabled_guideline_matches: Mapping[GuidelineMatch, Sequence[ToolId]],
+        staged_events: Sequence[EmittedEvent],
     ) -> ToolEventGenerationResult:
+        _ = preexecution_state  # Not used for now, but good to have for extensibility
+
         if not tool_enabled_guideline_matches:
             self._logger.debug("Skipping tool calling; no tools associated with guidelines found")
             return ToolEventGenerationResult(generations=[], events=[], insights=ToolInsights())
