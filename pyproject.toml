@@ -11,6 +11,7 @@ readme = "README.md"
 parlant = "parlant.bin.client:main"
 parlant-server = "parlant.bin.server:main"
 parlant-prepare-migration = "parlant.bin.prepare_migration:main"
+parlant-deploy = "parlant.deploy:main"  # Replace `parlant.deploy:main` with the actual module and function for deployment
 
 [tool.poetry.dependencies]
 aiofiles = "^24.1.0"
