@@ -67,6 +67,7 @@ transformers = { version = "^4.46.2", optional = true }
 litellm = { version = "^1.61.16", optional = true }
 pymongo = { version = "^4.11.1", optional = true }
 jinja2 = "^3.1.6"
+ollama = "^0.4.7"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -100,6 +101,8 @@ deepseek = ["torch", "transformers"]
 gemini = ["google-genai", "google-api-core", "torch"]
 
 litellm = ["litellm", "torch", "transformers"]
+
+ollama = [ollama]
 
 mongo = ["pymongo"]
 

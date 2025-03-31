@@ -226,6 +226,12 @@ def load_litellm() -> NLPService:
     )
 
 
+def load_ollama() -> NLPService:
+    return load_nlp_service(
+        "Ollama", "ollama", "OllamaService", "parlant.adapters.nlp.ollama_service"
+    )
+
+
 async def create_agent_if_absent(agent_store: AgentStore) -> None:
     agents = await agent_store.list_agents()
     if not agents:
@@ -407,6 +413,7 @@ async def initialize_container(
             "openai": load_openai,
             "together": load_together,
             "litellm": load_litellm,
+            "ollama": load_ollama,
         }
 
         c[ServiceRegistry] = await EXIT_STACK.enter_async_context(
@@ -675,6 +682,12 @@ def main() -> None:
         default=False,
     )
     @click.option(
+        "--ollama",
+        is_flag=True,
+        help="Run with Ollama. You must start your local Ollama server at http://localhost:10434 and install the extra package parlant[ollama].",
+        default=False,
+    )
+    @click.option(
         "--log-level",
         type=click.Choice(["debug", "info", "warning", "error", "critical"]),
         default="info",
@@ -717,6 +730,7 @@ def main() -> None:
         cerebras: bool,
         together: bool,
         litellm: bool,
+        ollama: bool,
         log_level: str,
         module: tuple[str],
         version: bool,
@@ -726,7 +740,7 @@ def main() -> None:
             print(f"Parlant v{VERSION}")
             sys.exit(0)
 
-        if sum([openai, aws, azure, deepseek, gemini, anthropic, cerebras, together, litellm]) > 2:
+        if sum([openai, aws, azure, deepseek, gemini, anthropic, cerebras, together, litellm, ollama]) > 2:
             print("error: only one NLP service profile can be selected")
             sys.exit(1)
 
@@ -761,6 +775,8 @@ def main() -> None:
         elif litellm:
             nlp_service = "litellm"
             require_env_keys(["LITELLM_PROVIDER_MODEL_NAME", "LITELLM_PROVIDER_API_KEY"])
+        elif ollama:
+            nlp_service = "ollama"
         else:
             assert False, "Should never get here"
 
