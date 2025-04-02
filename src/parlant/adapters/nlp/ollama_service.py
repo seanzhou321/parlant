@@ -17,12 +17,11 @@ import time
 import json
 import jsonfinder  # type: ignore
 import os
-from typing import Any, Mapping
+from typing import Any, Mapping, Dict, Optional
 from typing_extensions import override
 
 import ollama
 from pydantic import ValidationError, BaseModel
-import tiktoken
 
 from parlant.adapters.nlp.common import normalize_json_output
 from parlant.adapters.nlp.hugging_face import JinaAIEmbedder
@@ -31,7 +30,7 @@ from parlant.core.loggers import Logger
 from parlant.core.nlp.policies import policy, retry
 from parlant.core.nlp.tokenization import EstimatingTokenizer
 from parlant.core.nlp.service import NLPService
-from parlant.core.nlp.embedding import Embedder
+from parlant.core.nlp.embedding import Embedder, EmbeddingResult
 from parlant.core.nlp.generation import (
     T,
     SchematicGenerator,
@@ -45,26 +44,33 @@ from parlant.core.nlp.moderation import (
 
 
 class OllamaEstimatingTokenizer(EstimatingTokenizer):
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, config: OllamaConfig) -> None:
         self.model_name = model_name
-        # Map Ollama models to closest OpenAI models for tokenization
-        model_encoding_map = {
-            "llama2": "gpt-4",
-            "codellama": "gpt-4",
-            "mistral": "gpt-3.5-turbo",
-            "neural-chat": "gpt-3.5-turbo",
-            "qwen2": "gpt-4",          # Qwen-2.5 uses a similar architecture to GPT-4
-            "deepseek": "gpt-4",       # DeepSeek-R1 is similar to GPT-4 in capabilities
-            "phi": "gpt-3.5-turbo",    # Phi-4 is closer to GPT-3.5 in size and capabilities
-        }
-        base_model = model_name.split(":")[0]
-        encoding_model = model_encoding_map.get(base_model, "gpt-4")
-        self.encoding = tiktoken.encoding_for_model(encoding_model)
+        self._config = config
+        self._client = ollama.Client(host=config.base_url)
+        # Cache for tokenization results
+        self._token_cache: Dict[str, int] = {}
 
     @override
     async def estimate_token_count(self, prompt: str) -> int:
-        tokens = self.encoding.encode(prompt)
-        return len(tokens)
+        if prompt in self._token_cache:
+            return self._token_cache[prompt]
+        
+        try:
+            # ollama client does not have tokenize. 
+            # Instead, the response from generate or chat has prompt_eval_count field 
+            # that is the number of tokens in the prompt
+            result = self._client.generate(
+                model=self.model_name,
+                prompt=prompt
+            )
+            token_count = result['prompt_eval_count']
+            self._token_cache[prompt] = token_count
+            return token_count
+        except Exception as e:
+            self._logger.warning(f"Failed to tokenize using Ollama: {str(e)}")
+            # Fallback to rough estimation - 4 characters per token
+            return len(prompt) // 4
 
 
 class OllamaSchematicGenerator(SchematicGenerator[T]):
@@ -84,9 +90,10 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
     - num_gpu: Number of GPUs to use
     - num_thread: Number of CPU threads to use
     """
+
+    # gemma3 does not support embedding.
     supported_models = {
-        "llama2", "codellama", "mistral", "neural-chat",
-        "qwen2", "deepseek", "phi"
+        "llama3.2", "qwen2.5", "deepseek-r1", "phi4-mini"
     }
     # Update supported parameters to match Ollama's API
     supported_ollama_params = [
@@ -118,9 +125,11 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
         self._logger = logger
         self._config = config
         
-        # Configure ollama client with base URL
-        ollama.set_host(self._config.base_url)
-        self._tokenizer = OllamaEstimatingTokenizer(model_name=self.model_name)
+        self._client = ollama.Client(host=config.base_url)
+        self._tokenizer = OllamaEstimatingTokenizer(
+            model_name=self.model_name,
+            config=config
+        )
 
     @property
     @override
@@ -136,8 +145,7 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
         [
             retry(
                 exceptions=(
-                    ollama.RequestError,  # Connection errors
-                    ollama.TimeoutError,  # Timeout errors
+                    Exception,  # Ollama package doesn't expose specific error types
                 ),
             ),
         ]
@@ -161,23 +169,23 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
                 prompt = prompt.build()
 
             # Set default arguments including num_ctx
-            api_arguments = {
-                "num_ctx": 100 * 1024,  # Set default context window to 100K tokens
+            model_arguments = {
+                'num_ctx': 100_000,  # Default context size for Ollama
             }
             
             # Add user-provided arguments
             for k, v in hints.items():
                 if k == "max_tokens":
-                    api_arguments["num_predict"] = v
+                    model_arguments["num_predict"] = v
                 elif k in self.supported_ollama_params:
-                    api_arguments[k] = v
+                    model_arguments[k] = v
 
             t_start = time.time()
-            response = await ollama.chat(
+            response = self._client.chat(
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 format="json",
-                **api_arguments
+                options=model_arguments
             )
             t_end = time.time()
 
@@ -199,8 +207,6 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
             try:
                 content = self.schema.model_validate(json_content)
 
-                assert response.get('usage')
-
                 return SchematicGenerationResult(
                     content=content,
                     info=GenerationInfo(
@@ -208,14 +214,8 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
                         model=self.id,
                         duration=(t_end - t_start),
                         usage=UsageInfo(
-                            input_tokens=response['usage']['prompt_tokens'],
-                            output_tokens=response['usage']['completion_tokens'],
-                            extra={
-                                "cached_input_tokens": response['usage'].get(
-                                    "prompt_cache_hit_tokens",
-                                    0,
-                                )
-                            },
+                            input_tokens=response['prompt_eval_count'],
+                            output_tokens=response['eval_count'],
                         ),
                     ),
                 )
@@ -224,8 +224,8 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
                     f"JSON content returned by {self.model_name} does not match expected schema:\n{raw_content}"
                 )
                 raise
-        except ollama.APIConnectionError:
-            raise ollama.APIConnectionError(
+        except ConnectionError:
+            raise ConnectionError(
                 f"Failed to connect to Ollama server at {self._config.base_url}. "
                 "Is Ollama running?"
             )
@@ -250,16 +250,115 @@ class Ollama_Chat(OllamaSchematicGenerator[T]):
 
 
 class OllamaConfig(BaseModel):
-    base_url: str = "http://localhost:11434"
+    base_url: str = "http://localhost:10434"
     timeout: float = 60.0
-    model_name: str = "llama2"
+    model_name: str = "llama3.2" 
 
     @classmethod
     def from_env(cls) -> "OllamaConfig":
         return cls(
-            base_url=os.getenv("OLLAMA_BASE_URL", cls.base_url),
-            timeout=float(os.getenv("OLLAMA_TIMEOUT", cls.timeout)),
-            model_name=os.getenv("OLLAMA_MODEL", cls.model_name)
+            base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+            timeout=float(os.getenv("OLLAMA_TIMEOUT", "60.0")),
+            model_name=os.getenv("OLLAMA_MODEL", "llama3.2")
+        )
+    
+
+class OllamaEmbedder(Embedder):
+    """Ollama-based embedder using the ollama.embed API."""
+    
+    def __init__(self, model_name: str, logger: Logger, config: OllamaConfig) -> None:
+        self.model_name = model_name
+        self._logger = logger
+        self._config = config
+        self._client = ollama.Client(host=config.base_url)
+        self._tokenizer = OllamaEstimatingTokenizer(
+            model_name=self.model_name,
+            config=config
+        )
+
+    @property
+    @override
+    def id(self) -> str:
+        return f"ollama/{self.model_name}"
+
+    @property
+    @override
+    def tokenizer(self) -> OllamaEstimatingTokenizer:
+        return self._tokenizer
+
+    @property
+    @override
+    def max_tokens(self) -> int:
+        return 8192  # Standard limit for most embedding models
+
+    @property
+    @override
+    def dimensions(self) -> int:
+        dimension_map = {
+            "qwen2.5": 3584,
+            "llama3.2": 4096,
+            "deepseek-r1": 4096,
+            "phi4-mini": 2560
+        }
+        
+        # Extract base model name without tags/versions
+        base_model = self.model_name.split(":")[0]
+        
+        # Get dimension for model or fall back to default
+        dim = dimension_map.get(base_model)
+        if dim is None:
+            self._logger.warning(
+                f"Unknown embedding dimensions for model {base_model}, "
+                "falling back to default 4096"
+            )
+            dim = 4096
+            
+        return dim
+    @policy(
+        [
+            retry(
+                exceptions=(
+                    Exception,  # Ollama package doesn't expose specific error types
+                ),
+            ),
+        ]
+    )
+    @override
+    async def embed(
+        self,
+        texts: list[str],
+        hints: Mapping[str, Any] = {},
+    ) -> EmbeddingResult:
+        try:
+            vectors = []
+            for text in texts:
+                response = self._client.embed(
+                    model=self.model_name,
+                    input=text
+                )
+                # Convert embeddings to a flat list of floats
+                for  row in response['embeddings']:
+                    vectors.append(row)
+                
+            return EmbeddingResult(vectors=vectors)
+            
+        except ConnectionError:
+            raise ConnectionError(
+                f"Failed to connect to Ollama server at {self._config.base_url}. "
+                "Is Ollama running?"
+            )
+        except Exception as e:
+            self._logger.error(f"Ollama embedding request failed: {str(e)}")
+            raise
+
+
+class OllamaDefaultEmbedder(OllamaEmbedder):
+    def __init__(self, logger: Logger) -> None:
+        config = OllamaConfig.from_env()
+        super().__init__(
+            model_name=config.model_name,
+            logger=logger,
+            config=config
         )
 
 
@@ -275,11 +374,11 @@ class OllamaService(NLPService):
 
     @override
     async def get_schematic_generator(self, t: type[T]) -> OllamaSchematicGenerator[T]:
-        return Ollama_Chat[t](self._logger)  # type: ignore
+        return Ollama_Chat[t](self._logger)
 
     @override
     async def get_embedder(self) -> Embedder:
-        return JinaAIEmbedder()
+        return OllamaDefaultEmbedder(self._logger)
 
     @override
     async def get_moderation_service(self) -> ModerationService:

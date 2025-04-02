@@ -1,6 +1,7 @@
 # Local Installation Guide
 
 ### 1. Build the Package
+
 ```
 pip install build
 python -m build
@@ -22,6 +23,7 @@ pip install dist/my_package-0.1.0-py3-none-any.whl
 
 ```
 pip install -e .
+poetry install --extras ollama
 ```
 
 This creates an "editable" install where changes to your source code will be immediately available without reinstalling.

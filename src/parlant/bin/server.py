@@ -745,7 +745,7 @@ def main() -> None:
             sys.exit(1)
 
         non_default_service_selected = any(
-            (aws, azure, deepseek, gemini, anthropic, cerebras, together, litellm)
+            (aws, azure, deepseek, gemini, anthropic, cerebras, together, litellm, ollama)
         )
 
         if not non_default_service_selected:
