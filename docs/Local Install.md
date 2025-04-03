@@ -3,8 +3,8 @@
 ### 1. Build the Package
 
 ```
-pip install build
-python -m build
+pip install poetry
+poetry build
 ```
 
 This will create a dist/ directory containing your package distributions (both wheel and source)

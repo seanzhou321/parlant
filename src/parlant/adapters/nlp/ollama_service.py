@@ -167,10 +167,15 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
         try:
             if isinstance(prompt, PromptBuilder):
                 prompt = prompt.build()
+                
+            # Add token count check
+            token_count = await self.tokenizer.estimate_token_count(prompt)
+            if token_count > model_arguments.get('num_ctx', 100000):
+                raise ValueError(f"Prompt too long ({token_count} tokens). Maximum context size is {model_arguments.get('num_ctx')}")
 
             # Set default arguments including num_ctx
             model_arguments = {
-                'num_ctx': 100_000,  # Default context size for Ollama
+                'num_ctx': 1000000,  # Default context size for Ollama
             }
             
             # Add user-provided arguments
@@ -185,7 +190,8 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 format="json",
-                options=model_arguments
+                options=model_arguments,
+                timeout=self._config.timeout  # Add timeout from config
             )
             t_end = time.time()
 
@@ -246,7 +252,7 @@ class Ollama_Chat(OllamaSchematicGenerator[T]):
     @property
     @override
     def max_tokens(self) -> int:
-        return 128 * 1024
+        return 100 * 1024
 
 
 class OllamaConfig(BaseModel):
@@ -314,6 +320,27 @@ class OllamaEmbedder(Embedder):
             dim = 4096
             
         return dim
+
+    async def _chunk_and_embed(self, text: str, chunk_size: int = 8000) -> list[float]:
+        # Split text into chunks if it's too long
+        if len(text) > chunk_size:
+            chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+            all_embeddings = []
+            for chunk in chunks:
+                response = self._client.embed(
+                    model=self.model_name,
+                    input=chunk
+                )
+                all_embeddings.extend(response['embeddings'])
+            # Average the embeddings from all chunks
+            return [sum(x)/len(chunks) for x in zip(*all_embeddings)]
+        else:
+            response = self._client.embed(
+                model=self.model_name,
+                input=text
+            )
+            return response['embeddings']
+
     @policy(
         [
             retry(
@@ -331,17 +358,13 @@ class OllamaEmbedder(Embedder):
     ) -> EmbeddingResult:
         try:
             vectors = []
+            chunk_size = hints.get('chunk_size', 8000)
+            
             for text in texts:
-                response = self._client.embed(
-                    model=self.model_name,
-                    input=text
-                )
-                # Convert embeddings to a flat list of floats
-                for  row in response['embeddings']:
-                    vectors.append(row)
+                vector = await self._chunk_and_embed(text, chunk_size)
+                vectors.append(vector)
                 
             return EmbeddingResult(vectors=vectors)
-            
         except ConnectionError:
             raise ConnectionError(
                 f"Failed to connect to Ollama server at {self._config.base_url}. "

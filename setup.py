@@ -1,14 +1,14 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="sz-parlant",
+    name="szparlant",
     version="0.1.0",
     packages=find_packages(),
     install_requires=[
         "numpy>=1.21.0",  # Example dependency
         "pandas>=1.3.0"   # Example dependency
     ],
-    author="Seab Zhou",
+    author="Sean Zhou",
     author_email="sean.zhou321@gmail.com",
     description="A forked project from parlant develope branch",
     keywords="sample, package",
