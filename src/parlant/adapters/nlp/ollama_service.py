@@ -175,7 +175,7 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
 
             # Set default arguments including num_ctx
             model_arguments = {
-                'num_ctx': 1000000,  # Default context size for Ollama
+                'num_ctx': 100000,  # Default context size for Ollama
             }
             
             # Add user-provided arguments
