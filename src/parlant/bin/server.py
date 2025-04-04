@@ -127,7 +127,7 @@ from parlant.core.version import VERSION
 DEFAULT_PORT = 8800
 SERVER_ADDRESS = "https://localhost"
 
-DEFAULT_NLP_SERVICE = "openai"
+DEFAULT_NLP_SERVICE = "ollama"
 
 DEFAULT_HOME_DIR = "runtime-data" if Path("runtime-data").exists() else "parlant-data"
 PARLANT_HOME_DIR = Path(os.environ.get("PARLANT_HOME", DEFAULT_HOME_DIR))

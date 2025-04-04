@@ -125,7 +125,7 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
         self._logger = logger
         self._config = config
         
-        self._client = ollama.Client(host=config.base_url)
+        self._client = ollama.Client(host=config.base_url, timeout=config.timeout)
         self._tokenizer = OllamaEstimatingTokenizer(
             model_name=self.model_name,
             config=config
@@ -168,16 +168,16 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
             if isinstance(prompt, PromptBuilder):
                 prompt = prompt.build()
                 
-            # Add token count check
-            token_count = await self.tokenizer.estimate_token_count(prompt)
-            if token_count > model_arguments.get('num_ctx', 100000):
-                raise ValueError(f"Prompt too long ({token_count} tokens). Maximum context size is {model_arguments.get('num_ctx')}")
-
             # Set default arguments including num_ctx
             model_arguments = {
                 'num_ctx': 100000,  # Default context size for Ollama
             }
             
+            # Add token count check
+            token_count = await self.tokenizer.estimate_token_count(prompt)
+            if token_count > model_arguments.get('num_ctx', 100000):
+                raise ValueError(f"Prompt too long ({token_count} tokens). Maximum context size is {model_arguments.get('num_ctx')}")
+
             # Add user-provided arguments
             for k, v in hints.items():
                 if k == "max_tokens":
@@ -190,8 +190,7 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 format="json",
-                options=model_arguments,
-                timeout=self._config.timeout  # Add timeout from config
+                options=model_arguments
             )
             t_end = time.time()
 
@@ -303,7 +302,7 @@ class OllamaEmbedder(Embedder):
         dimension_map = {
             "qwen2.5": 3584,
             "llama3.2": 4096,
-            "deepseek-r1": 4096,
+            "deepseek-r1": 3584,
             "phi4-mini": 2560
         }
         
@@ -362,7 +361,8 @@ class OllamaEmbedder(Embedder):
             
             for text in texts:
                 vector = await self._chunk_and_embed(text, chunk_size)
-                vectors.append(vector)
+                for v in vector:
+                    vectors.append(v) 
                 
             return EmbeddingResult(vectors=vectors)
         except ConnectionError:
