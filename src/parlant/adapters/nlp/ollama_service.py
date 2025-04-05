@@ -92,8 +92,15 @@ class OllamaSchematicGenerator(SchematicGenerator[T]):
     """
 
     # gemma3 does not support embedding.
+    # deepseek-r1 does not support formated output.
+    # phi4 has too small context window, 16k
+    # llama3.1 has too many schema validation errors.
+    # llama3.2 has occassional schema output validation errors at guideline matching steps.
+    # qwen2.5:0.5b takes > 20min per guideline.
+    # qwen2.5:3b throws output schema validation errors momentarily
+    # phi4-mini has too many schema validation errors at the guideline matching stage.
     supported_models = {
-        "llama3.2", "qwen2.5", "deepseek-r1", "phi4-mini"
+        "llama3.1", "qwen2.5", "phi4-mini", "llama3.2", "qwen2.5:3b"
     }
     # Update supported parameters to match Ollama's API
     supported_ollama_params = [
@@ -256,15 +263,15 @@ class Ollama_Chat(OllamaSchematicGenerator[T]):
 
 class OllamaConfig(BaseModel):
     base_url: str = "http://localhost:10434"
-    timeout: float = 60.0
-    model_name: str = "llama3.2" 
+    timeout: float = 1200.0
+    model_name: str = "qwen2.5" 
 
     @classmethod
     def from_env(cls) -> "OllamaConfig":
         return cls(
             base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
-            timeout=float(os.getenv("OLLAMA_TIMEOUT", "60.0")),
-            model_name=os.getenv("OLLAMA_MODEL", "llama3.2")
+            timeout=float(os.getenv("OLLAMA_TIMEOUT", 1200.0)),
+            model_name=os.getenv("OLLAMA_MODEL", "qwen2.5")
         )
     
 
@@ -300,10 +307,13 @@ class OllamaEmbedder(Embedder):
     @override
     def dimensions(self) -> int:
         dimension_map = {
+            # "llama3.2": 3072,
+            "llama3.1": 4096,
             "qwen2.5": 3584,
-            "llama3.2": 4096,
-            "deepseek-r1": 3584,
-            "phi4-mini": 2560
+            "qwen2.5:3b": 2048,
+            "qwen2.5:1.5b": 1536,
+            "qwen2.5:0.5b": 896,
+            "phi4-mini": 3072
         }
         
         # Extract base model name without tags/versions
